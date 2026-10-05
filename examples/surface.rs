@@ -19,8 +19,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let path = path.ok_or("usage: surface PAGE [--fold]")?;
     let page = mantern::page::parse(&path)?;
-    let mut messages = mantern::page_messages("man", &page, fold, true);
-    messages.extend(mantern::leave_messages("man"));
+    let mut messages = mantern::page_messages("man", &page, fold, true, None)?;
+    messages.extend(mantern::leave_messages("man", Some(2), true));
 
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("page");
     let name = name.split('.').next().unwrap_or(name);

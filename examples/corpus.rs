@@ -133,6 +133,8 @@ struct PageStats {
     rendered_lines: Option<usize>,
     diag_unsupported: usize,
     diag_error: usize,
+    /// Findings that make mantern decline the page.
+    declining: Vec<String>,
     diag_warning: usize,
     diag_style: usize,
     /// Distinct messages at error/unsupported level (for aggregation).
@@ -185,6 +187,12 @@ fn analyze(path: &Path) -> PageStats {
     s.alias_target = doc.metadata.alias_target.clone();
 
     for d in &report.diagnostics {
+        if mantern::page::loses_content(d) {
+            let msg = format!("{:?}: {}", d.level, d.message);
+            if !s.declining.contains(&msg) {
+                s.declining.push(msg);
+            }
+        }
         match d.level {
             DiagnosticLevel::Unsupported => s.diag_unsupported += 1,
             DiagnosticLevel::Error => s.diag_error += 1,
@@ -479,6 +487,15 @@ fn report(stats: &[PageStats], wall: std::time::Duration) {
     println!("any unsupported  {:>6} ({})", with(&|s| s.diag_unsupported > 0), pct(with(&|s| s.diag_unsupported > 0), real.len()));
     println!("any error        {:>6} ({})", with(&|s| s.diag_error > 0), pct(with(&|s| s.diag_error > 0), real.len()));
     println!("clean (no unsup/error) {:>6} ({})", with(&|s| s.diag_unsupported + s.diag_error == 0), pct(with(&|s| s.diag_unsupported + s.diag_error == 0), real.len()));
+    let declined = |s: &PageStats| !s.declining.is_empty();
+    println!("declined by mantern {:>6} ({})", with(&declined), pct(with(&declined), real.len()));
+    let mut causes: BTreeMap<String, usize> = BTreeMap::new();
+    for s in &real {
+        for m in &s.declining {
+            *causes.entry(m.clone()).or_default() += 1;
+        }
+    }
+    println!("\n== declining findings (pages affected)\n{}", top(&causes, 10));
 
     let mut hard: BTreeMap<String, usize> = BTreeMap::new();
     for s in &real {

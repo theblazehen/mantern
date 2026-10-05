@@ -64,6 +64,7 @@ To close the live page and get back to your shell, press `q`, Ctrl-C, or Ctrl-D.
 - The terminal doesn't answer the TSP handshake or doesn't advertise `flow` support
 - `MANTERN=0` is set
 - It can't find the initial page, or the page doesn't use `man(7)` or `mdoc(7)`, or parsing or native drawing errors out
+- mandoc reports that it dropped part of the page (a source error other than an unknown macro or an `.mso` load, or a truncated tree), or the page is too big or too deep for a Tern surface
 
 If the system `man` isn't available on `PATH`, it will just show an error.
 

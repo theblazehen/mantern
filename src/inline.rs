@@ -180,27 +180,35 @@ fn autolink(spans: &mut Vec<Span>) {
     if links.is_empty() {
         return;
     }
+    // Spans, boundaries and links are all visited in text order, so cursors
+    // only move forward: a paragraph with thousands of links stays linear.
+    let mut bounds: Vec<usize> = links.iter().flat_map(|&(a, b, _)| [a, b]).collect();
+    bounds.sort_unstable();
+    bounds.dedup();
+    let mut next_bound = 0;
+    let mut first_link = 0;
     let mut out = Vec::with_capacity(spans.len() + links.len() * 2);
     let mut offset = 0;
     for span in spans.drain(..) {
         let (start, end) = (offset, offset + span.text.len());
         offset = end;
-        let mut cuts = vec![start, end];
-        for &(a, b, _) in &links {
-            for at in [a, b] {
-                if at > start && at < end {
-                    cuts.push(at);
-                }
-            }
+        while bounds.get(next_bound).is_some_and(|&at| at <= start) {
+            next_bound += 1;
         }
-        cuts.sort_unstable();
-        cuts.dedup();
+        let inner = bounds[next_bound..].iter().take_while(|&&at| at < end);
+        let cuts: Vec<usize> = std::iter::once(start).chain(inner.copied()).chain(std::iter::once(end)).collect();
+        next_bound += cuts.len() - 2;
         for pair in cuts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
+            // Links that end before this piece can't cover it or anything later.
+            while links.get(first_link).is_some_and(|&(_, lb, _)| lb <= a) {
+                first_link += 1;
+            }
             let href = span.href.clone().or_else(|| {
-                links
+                links[first_link..]
                     .iter()
-                    .find(|&&(la, lb, _)| a >= la && b <= lb)
+                    .take_while(|&&(la, _, _)| la <= a)
+                    .find(|&&(_, lb, _)| b <= lb)
                     .map(|(_, _, h)| h.clone())
             });
             out.push(Span {
@@ -238,26 +246,40 @@ pub fn find_links(text: &str) -> Vec<(usize, usize, String)> {
             + rest
                 .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\u{a0}'))
                 .unwrap_or(rest.len());
-        loop {
-            let url = &text[start..end];
-            let unbalanced = url.ends_with(')') && url.matches(')').count() > url.matches('(').count();
-            if end > start && (matches!(bytes[end - 1], b'.' | b',' | b';' | b':' | b'\'') || unbalanced) {
-                end -= 1;
-            } else {
-                break;
+        // Trailing punctuation isn't part of the URL, nor is a `)` with no `(`
+        // to close; the bracket counts are taken once and kept up to date.
+        let url = &bytes[start..end];
+        let opens = url.iter().filter(|&&c| c == b'(').count();
+        let mut closes = url.iter().filter(|&&c| c == b')').count();
+        while end > start {
+            match bytes[end - 1] {
+                b'.' | b',' | b';' | b':' | b'\'' => end -= 1,
+                b')' if closes > opens => {
+                    closes -= 1;
+                    end -= 1;
+                }
+                _ => break,
             }
         }
         links.push((start, end, text[start..end].to_owned()));
         search = end.max(start + 1);
     }
 
-    let in_url = |at: usize, links: &[(usize, usize, String)]| links.iter().any(|&(a, b, _)| at >= a && at < b);
+    // URLs are found in text order and never overlap, so one cursor tells
+    // whether a parenthesis falls inside one.
     let url_count = links.len();
+    let mut url_cursor = 0;
     for (open, _) in text.match_indices('(') {
-        if in_url(open, &links[..url_count]) {
+        while url_cursor < url_count && links[url_cursor].1 <= open {
+            url_cursor += 1;
+        }
+        if url_cursor < url_count && links[url_cursor].0 <= open {
             continue;
         }
-        let Some(close_rel) = text[open + 1..].find(')') else { continue };
+        // A section is at most six bytes, so the `)` is within seven.
+        let window = &bytes[open + 1..bytes.len().min(open + 8)];
+        let Some(close_rel) = window.iter().position(|&c| c == b')') else { continue };
+
         let section = &text[open + 1..open + 1 + close_rel];
         let valid_section = section.len() <= 6
             && section.starts_with(|c: char| c.is_ascii_digit() || c == 'n')
@@ -289,7 +311,8 @@ pub fn find_links(text: &str) -> Vec<(usize, usize, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::find_links;
+    use super::{Inline, find_links};
+    use crate::escape::Font;
 
     #[test]
     fn finds_references_and_urls() {
@@ -306,5 +329,19 @@ mod tests {
             found,
             [("openssl-req(1ssl)", "man:openssl-req(1ssl)".to_owned()), ("perlre(1)", "man:perlre(1)".to_owned())]
         );
+    }
+
+    #[test]
+    fn pathological_paragraph_completes() {
+        let mut inline = Inline::new(false);
+        for i in 0..20_000 {
+            let font = if i % 2 == 0 { Font::ROMAN } else { Font::ITALIC };
+            inline.word(&format!("page{i}(1),"), font, None, false);
+        }
+        inline.word(&format!("http://example.com/{}", ")".repeat(20_000)), Font::ROMAN, None, false);
+        inline.word(&"(".repeat(20_000), Font::ROMAN, None, false);
+        let spans = inline.take();
+        let linked = spans.iter().filter(|s| s["href"].is_string()).count();
+        assert!(linked >= 20_000);
     }
 }

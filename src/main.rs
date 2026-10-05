@@ -8,16 +8,27 @@
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use libmandoc_rs::MacroSet;
-use mantern::browse::Browser;
-use mantern::{page, tsp, tty};
+use mantern::browse::{Browser, End};
+use mantern::{is_section, page, tsp, tty};
 use serde_json::{Value, json};
+
+/// What `native` did.
+enum Native {
+    /// The page was shown and the user left.
+    Drawn,
+    /// Not ours to draw: the system `man` takes over.
+    Declined,
+    /// The session ended on the terminal (hung up, signalled, broken): there
+    /// is no one left to show a manual to, so nothing else runs.
+    Ended(ExitCode),
+}
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
@@ -26,8 +37,9 @@ fn main() -> ExitCode {
         return ExitCode::from(127);
     };
     match native(&system_man, &args) {
-        Ok(true) => return ExitCode::SUCCESS,
-        Ok(false) => {}
+        Ok(Native::Drawn) => return ExitCode::SUCCESS,
+        Ok(Native::Ended(code)) => return code,
+        Ok(Native::Declined) => {}
         Err(err) => eprintln!("mantern: drawing natively failed ({err}); using {}", system_man.display()),
     }
     let err = Command::new(&system_man).args(&args).exec();
@@ -35,17 +47,21 @@ fn main() -> ExitCode {
     ExitCode::from(126)
 }
 
-/// Draws the page in Tern. `Ok(false)` when this invocation isn't one we
-/// draw (no Tern, not a terminal, not a single page): the system `man`
-/// handles it instead.
-fn native(system_man: &Path, args: &[OsString]) -> Result<bool, Box<dyn Error>> {
+/// Draws the page in Tern. `Declined` when this invocation isn't one we
+/// draw (no Tern, not a terminal, not a single page, a page or a terminal
+/// that can't do it): the system `man` handles it instead. An error means
+/// the terminal was never touched.
+fn native(system_man: &Path, args: &[OsString]) -> Result<Native, Box<dyn Error>> {
     if !eligible(args) {
         return Ok(declined("not a single page on a terminal outside a multiplexer"));
     }
     let Some(path) = page::locate(system_man, args) else {
         return Ok(declined("the system man found no page"));
     };
-    let page = page::parse(&path)?;
+    let page = match page::parse(&path) {
+        Ok(page) => page,
+        Err(err) => return Ok(declined(&format!("the page can't be drawn natively: {err}"))),
+    };
     if page.document.macro_set == MacroSet::None {
         return Ok(declined("the page uses neither man(7) nor mdoc(7)"));
     }
@@ -53,7 +69,14 @@ fn native(system_man: &Path, args: &[OsString]) -> Result<bool, Box<dyn Error>> 
     let mut tty = tty::Tty::open_raw()?;
     let mut stdout = io::stdout().lock();
     let query = json!({ "q": "hello", "v": [1], "app": "mantern", "ver": env!("CARGO_PKG_VERSION") });
-    let Some(hello) = tty.hello(&mut stdout, &query.to_string(), Duration::from_secs(1))? else {
+    let hello = match tty.hello(&mut stdout, &query.to_string(), Duration::from_secs(1)) {
+        Ok(hello) => hello,
+        Err(err) => return Ok(failed(&err)),
+    };
+    if let Some(code) = terminated(&tty) {
+        return Ok(Native::Ended(code));
+    }
+    let Some(hello) = hello else {
         return Ok(declined("the terminal doesn't speak TSP"));
     };
     if env::var_os("MANTERN_DEBUG").is_some() {
@@ -69,17 +92,50 @@ fn native(system_man: &Path, args: &[OsString]) -> Result<bool, Box<dyn Error>> 
         system_man: system_man.to_owned(),
         styles: has_feature(&hello, "styles"),
         allow_fold: env::var_os("MANTERN_FOLD").is_none_or(|v| v != "0"),
+        kinds: hello["kinds"]
+            .as_array()
+            .map(|kinds| kinds.iter().filter_map(|k| k.as_str().map(str::to_owned)).collect()),
+        // A terminal that granted none could never draw the first frame.
+        credits: hello["credits"].as_u64().unwrap_or(2).max(1),
     };
-    browser.run(&mut tty, &mut wire, &page)?;
-    Ok(true)
+    Ok(match browser.run(&mut tty, &mut wire, &page) {
+        End::Quit => Native::Drawn,
+        End::Declined(why) => match terminated(&tty) {
+            Some(code) => Native::Ended(code),
+            None => declined(&why),
+        },
+        End::Hangup => Native::Ended(ExitCode::from(HANGUP)),
+        End::Signal(signal) => Native::Ended(ExitCode::from(128 + signal as u8)),
+        End::Failed(err) => failed(&err),
+    })
 }
 
-/// `false`, after saying why when `MANTERN_DEBUG` is set.
-fn declined(reason: &str) -> bool {
+/// 128 + SIGHUP, the status of a process the terminal hung up on.
+const HANGUP: u8 = 129;
+
+/// The status to leave with when the terminal hung up or a termination
+/// signal arrived (while the terminal was already restored or being so).
+fn terminated(tty: &tty::Tty) -> Option<ExitCode> {
+    match tty.signal() {
+        Some(signal) => Some(ExitCode::from(128 + signal as u8)),
+        None => tty.hung_up().then_some(ExitCode::from(HANGUP)),
+    }
+}
+
+/// The terminal could not be read or written: say so, and don't start
+/// another reader on it.
+fn failed(err: &io::Error) -> Native {
+    // Stderr may be the broken terminal itself; a failed warning is no failure.
+    let _ = writeln!(io::stderr(), "mantern: terminal I/O failed: {err}");
+    Native::Ended(ExitCode::FAILURE)
+}
+
+/// `Declined`, after saying why when `MANTERN_DEBUG` is set.
+fn declined(reason: &str) -> Native {
     if env::var_os("MANTERN_DEBUG").is_some() {
         eprintln!("mantern: system man used: {reason}");
     }
-    false
+    Native::Declined
 }
 
 /// One page (`[SECTION] NAME`) written to a terminal outside a multiplexer
@@ -100,12 +156,6 @@ fn eligible(args: &[OsString]) -> bool {
         [section, name] => is_section(section) && !name.starts_with('-'),
         _ => false,
     }
-}
-
-fn is_section(s: &str) -> bool {
-    s.starts_with(|c: char| c.is_ascii_digit() || c == 'n' || c == 'l')
-        && s.len() <= 6
-        && s.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 fn has_feature(hello: &Value, name: &str) -> bool {

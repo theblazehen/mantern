@@ -5,11 +5,13 @@
 //! no-fill text and tbl(7) tables HTML tables. Whatever a page does that
 //! has no native counterpart degrades to its text.
 
+use std::collections::HashSet;
+
 use libmandoc_rs::{Document, MacroSet, Node, NodeKind, NormalizedFont, NormalizedListKind, TableCellKind};
 use serde_json::{Value, json};
 
 use crate::escape::{self, Font, FontState};
-use crate::inline::Inline;
+use crate::inline::{Inline, find_links};
 
 pub struct Options {
     /// Fold every section but NAME, SYNOPSIS and DESCRIPTION (long pages).
@@ -191,19 +193,22 @@ impl Renderer {
         match self.current.as_str() {
             "SYNOPSIS" => body = vec![self.el("div", "mt-synopsis", body)],
             "SEE ALSO" => {
-                let mut hrefs = Vec::new();
-                collect_links(&body, &mut hrefs);
-                if !hrefs.is_empty() {
-                    let chips: Vec<Value> = hrefs
-                        .into_iter()
-                        .map(|(text, href)| {
-                            // A page chip reads `name(1)`; the linked span alone may be only `name`.
-                            let label = href.strip_prefix("man:").map_or(text.as_str(), |l| l).to_owned();
-                            self.node("badge", json!({ "text": label, "tone": "accent", "href": href }), Vec::new())
-                        })
-                        .collect();
-                    body = vec![self.node("row", json!({ "wrap": true, "gap": "sm" }), chips)];
+                let mut out = Vec::new();
+                for item in see_also_items(body) {
+                    match item {
+                        SeeAlso::Keep(node) => out.push(node),
+                        SeeAlso::Chips(refs) => {
+                            let chips: Vec<Value> = refs
+                                .into_iter()
+                                .map(|(label, href)| {
+                                    self.node("badge", json!({ "text": label, "tone": "accent", "href": href }), Vec::new())
+                                })
+                                .collect();
+                            out.push(self.node("row", json!({ "wrap": true, "gap": "sm" }), chips));
+                        }
+                    }
                 }
+                body = out;
             }
             _ => {}
         }
@@ -1089,20 +1094,71 @@ fn spans_plain(spans: &[Value]) -> String {
     spans.iter().map(|s| s.as_str().or_else(|| s["t"].as_str()).unwrap_or("")).collect()
 }
 
-/// The `(text, href)` of every linked span in `nodes`, once each, in order.
-fn collect_links(nodes: &[Value], out: &mut Vec<(String, String)>) {
-    for node in nodes {
-        for span in node["p"]["spans"].as_array().into_iter().flatten() {
-            if let (Some(text), Some(href)) = (span["t"].as_str(), span["href"].as_str())
-                && !out.iter().any(|(_, h)| h == href)
-            {
-                out.push((text.to_owned(), href.to_owned()));
+/// A SEE ALSO block: kept as it is, or a run of references shown as chips.
+enum SeeAlso {
+    Keep(Value),
+    /// `(label, href)`, once per target, in order.
+    Chips(Vec<(String, String)>),
+}
+
+/// Paragraphs that are only a list of references become chips; every other
+/// block (prose, bibliography entries, paragraphs mixing text and
+/// references) stays, its links working in place. Neighbouring reference
+/// paragraphs share one chip row.
+fn see_also_items(body: Vec<Value>) -> Vec<SeeAlso> {
+    let mut items: Vec<SeeAlso> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for node in body {
+        let Some(refs) = reference_run(&node) else {
+            seen.clear();
+            items.push(SeeAlso::Keep(node));
+            continue;
+        };
+        if !matches!(items.last(), Some(SeeAlso::Chips(_))) {
+            seen.clear();
+            items.push(SeeAlso::Chips(Vec::new()));
+        }
+        let Some(SeeAlso::Chips(chips)) = items.last_mut() else { unreachable!("a chip group was just pushed") };
+        for (label, href) in refs {
+            if seen.insert(href.clone()) {
+                chips.push((label, href));
             }
         }
-        if let Some(children) = node["c"].as_array() {
-            collect_links(children, out);
-        }
     }
+    items
+}
+
+/// The `(label, href)` of each reference in a paragraph made only of
+/// `name(section)` references and URLs, separated by commas, periods and
+/// whitespace; `None` for anything else.
+fn reference_run(node: &Value) -> Option<Vec<(String, String)>> {
+    if node["k"] != "text" {
+        return None;
+    }
+    let plain = spans_plain(node["p"]["spans"].as_array()?);
+    let links = find_links(&plain);
+    let mut at = 0;
+    for &(a, b, _) in &links {
+        let between = plain.get(at..a)?;
+        if !between.chars().all(|c| c.is_whitespace() || matches!(c, ',' | '.')) {
+            return None;
+        }
+        at = b;
+    }
+    let tail = plain.get(at..)?;
+    if links.is_empty() || !tail.chars().all(|c| c.is_whitespace() || matches!(c, ',' | '.')) {
+        return None;
+    }
+    Some(
+        links
+            .into_iter()
+            .map(|(a, b, href)| {
+                // A page chip reads `name(1)`; a URL chip shows the URL.
+                let label = href.strip_prefix("man:").unwrap_or(&plain[a..b]).to_owned();
+                (label, href)
+            })
+            .collect(),
+    )
 }
 
 impl Renderer {
@@ -1113,5 +1169,59 @@ impl Renderer {
             self.feed(part(&hp, NodeKind::Body), flow);
             self.flush(flow);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::{SeeAlso, see_also_items};
+
+    fn para(text: &str) -> Value {
+        json!({ "id": "n", "k": "text", "p": { "spans": [text], "role": "p" } })
+    }
+
+    #[test]
+    fn standalone_reference_paragraphs_become_one_chip_row() {
+        let items = see_also_items(vec![para("ls(1), git-commit(1)."), para("ls(1), openssl-req(1ssl)")]);
+        let [SeeAlso::Chips(chips)] = items.as_slice() else { panic!("one chip group expected") };
+        let labels: Vec<_> = chips.iter().map(|(l, h)| (l.as_str(), h.as_str())).collect();
+        assert_eq!(
+            labels,
+            [
+                ("ls(1)", "man:ls(1)"),
+                ("git-commit(1)", "man:git-commit(1)"),
+                ("openssl-req(1ssl)", "man:openssl-req(1ssl)"),
+            ]
+        );
+    }
+
+    #[test]
+    fn prose_and_mixed_paragraphs_survive() {
+        let prose = para("RFC 2616, Hypertext Transfer Protocol.");
+        let mixed = para("See also curl(1) for the details.");
+        let unlinked = para("Knuth, The TeXbook.");
+        let items = see_also_items(vec![prose.clone(), para("ls(1)"), mixed.clone(), unlinked.clone()]);
+        assert!(matches!(&items[0], SeeAlso::Keep(n) if *n == prose));
+        assert!(matches!(&items[1], SeeAlso::Chips(c) if c.len() == 1));
+        assert!(matches!(&items[2], SeeAlso::Keep(n) if *n == mixed));
+        assert!(matches!(&items[3], SeeAlso::Keep(n) if *n == unlinked));
+    }
+
+    #[test]
+    fn url_chip_keeps_its_address() {
+        let items = see_also_items(vec![para("https://example.com/doc, ls(1).")]);
+        let [SeeAlso::Chips(chips)] = items.as_slice() else { panic!("one chip group expected") };
+        assert_eq!(chips[0], ("https://example.com/doc".to_owned(), "https://example.com/doc".to_owned()));
+        assert_eq!(chips[1].1, "man:ls(1)");
+    }
+
+    #[test]
+    fn huge_reference_list_completes() {
+        let text: String = (0..20_000).map(|i| format!("page{i}(1), ")).collect();
+        let items = see_also_items(vec![para(&text)]);
+        let [SeeAlso::Chips(chips)] = items.as_slice() else { panic!("one chip group expected") };
+        assert_eq!(chips.len(), 20_000);
     }
 }
