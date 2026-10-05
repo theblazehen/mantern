@@ -1,6 +1,6 @@
 # mantern
 
-`mantern` is a small Rust man page viewer for the [Tern](https://docs.stencil.so/tern/) terminal. It draws pages as native UI instead of pager text.
+`mantern` is a small Rust man page viewer for the [Tern](https://docs.stencil.so/tern/) terminal. 
 
 ![mantern tar in Tern 0.4.5, showing the page title and synopsis card](docs/screenshot.png)
 
@@ -102,8 +102,6 @@ mise run corpus
 ```
 
 `examples/corpus.rs` is a development spike that parses pages under the system's `manpath` and reports libmandoc coverage. It also accepts explicit man roots, JSON output, and a single-page AST dump. `examples/surface.rs` writes a page's TSP messages as a replayable recording without a terminal.
-
-There's also a `demo/` directory with the video workflow: `demo/scenarios.py` prepares interactions, `demo/shoot.sh` captures them with headless Tern, and `demo/video/` assembles the video with Remotion. These scripts expect a prepared Crabbox workspace and fixed tool paths. They are development tools, not part of the installed binary. Generated video output is git-ignored.
 
 ## License
 
