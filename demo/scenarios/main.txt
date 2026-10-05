@@ -283,7 +283,7 @@ wait 150
 shot see0
 wait 700
 shot see1
-click 198 655
+click 198 571
 wait 200
 shot go0
 wait 700

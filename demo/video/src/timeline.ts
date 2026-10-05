@@ -59,8 +59,8 @@ export const scenes: Scene[] = [
     segs: [seg("m", "see1", 8), seg("m", "go0", 4), seg("m", "go1", 8), seg("m", "go2", 54)],
     pointer: [
       [0, 130, 658],
-      [7, 198, 655],
-      [8, 198, 655, true],
+      [7, 198, 571],
+      [8, 198, 571, true],
       [74, 640, 300],
     ],
   },

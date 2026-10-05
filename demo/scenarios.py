@@ -21,7 +21,7 @@ LESS = "/nix/store/zi4d0awnc6crz18s177bv9y2yz9al3lq-less-710/bin/less"
 
 # Where the clicks land in a 1280x800 window (CSS px), read from the layout JSON of a probe shot.
 SEE_ALSO_HEAD = (120, 594 + 64)
-GZIP_CHIP = (198, 655)
+GZIP_CHIP = (198, 571)
 
 
 def typing(prefix: str, text: str) -> list[str]:
