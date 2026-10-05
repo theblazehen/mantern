@@ -2,7 +2,7 @@ import {
   AbsoluteFill,
   Audio,
   Easing,
-  Img,
+  OffthreadVideo,
   Sequence,
   interpolate,
   spring,
@@ -148,38 +148,26 @@ const Pointer = ({ path }: { path: NonNullable<Scene["pointer"]> }) => {
   );
 };
 
-const SceneView = ({ scene }: { scene: Scene }) => {
-  const f = useCurrentFrame();
-  let at = 0;
-  let current = scene.segs[scene.segs.length - 1];
-  for (const s of scene.segs) {
-    if (f < at + s.frames) {
-      current = s;
-      break;
-    }
-    at += s.frames;
-  }
-  return (
-    <AbsoluteFill>
-      <Steps active={scene.step} />
-      <div
-        style={{
-          position: "absolute",
-          left: WIN_X,
-          top: WIN_Y,
-          width: WIN_W,
-          height: WIN_H,
-          borderRadius: 16,
-          overflow: "hidden",
-          boxShadow: "0 40px 90px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08)",
-        }}
-      >
-        <Img src={staticFile(`shots/${current.dir}/${current.name}.jpg`)} style={{ width: WIN_W, height: WIN_H, display: "block" }} />
-      </div>
-      {scene.pointer && <Pointer path={scene.pointer} />}
-    </AbsoluteFill>
-  );
-};
+const SceneView = ({ scene, footageFrom }: { scene: Scene; footageFrom: number }) => (
+  <AbsoluteFill>
+    <Steps active={scene.step} />
+    <div
+      style={{
+        position: "absolute",
+        left: WIN_X,
+        top: WIN_Y,
+        width: WIN_W,
+        height: WIN_H,
+        borderRadius: 16,
+        overflow: "hidden",
+        boxShadow: "0 40px 90px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08)",
+      }}
+    >
+      <OffthreadVideo muted src={staticFile("footage.mp4")} startFrom={footageFrom} style={{ width: WIN_W, height: WIN_H }} />
+    </div>
+    {scene.pointer && <Pointer path={scene.pointer} />}
+  </AbsoluteFill>
+);
 
 const Outro = () => {
   const f = useCurrentFrame();
@@ -219,10 +207,12 @@ const Outro = () => {
 
 export const Demo = () => {
   let at = INTRO;
+  let footage = 0;
   const offsets = scenes.map((s) => {
-    const from = at;
+    const placed = { from: at, footageFrom: footage };
     at += sceneFrames(s);
-    return from;
+    footage += sceneFrames(s);
+    return placed;
   });
   return (
     <AbsoluteFill style={{ background: "#0a0e16" }}>
@@ -232,8 +222,8 @@ export const Demo = () => {
         <Intro />
       </Sequence>
       {scenes.map((s, i) => (
-        <Sequence key={s.id} from={offsets[i]} durationInFrames={sceneFrames(s)}>
-          <SceneView scene={s} />
+        <Sequence key={s.id} from={offsets[i].from} durationInFrames={sceneFrames(s)}>
+          <SceneView scene={s} footageFrom={offsets[i].footageFrom} />
         </Sequence>
       ))}
       <Sequence from={at} durationInFrames={OUTRO}>
