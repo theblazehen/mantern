@@ -1,0 +1,17 @@
+ready
+run "export PATH=/workspace/mt/a:/workspace/mt/b:$PATH; PS1=$(printf '\\001\\033[38;5;75m\\002~/projects\\001\\033[0m\\002 \\001\\033[38;5;141m\\002❯\\001\\033[0m\\002 '); printf '\\033[2J\\033[H'"
+run "man() { /nix/store/d6fjifwjq8sli7k7nk157jhk2r69fmrz-mandoc-1.14.6/bin/mandoc -T utf8 /workspace/mt/tar.1 | /nix/store/zi4d0awnc6crz18s177bv9y2yz9al3lq-less-710/bin/less; }; export LESS_TERMCAP_md=$(printf '\\033[1;38;5;9m') LESS_TERMCAP_us=$(printf '\\033[1;38;5;10m') LESS_TERMCAP_ue=$(printf '\\033[0m') LESS_TERMCAP_me=$(printf '\\033[0m'); printf '\\033[2J\\033[H'"
+wait 500
+shot c00
+run "man tar"
+wait 1800
+shot c01
+type " "
+wait 500
+shot c02
+type " "
+wait 500
+shot c03
+type " "
+wait 500
+shot c04

@@ -1,0 +1,6 @@
+[tools]
+rust = "1.90"
+
+[tasks.corpus]
+description = "Dev spike: parse every man page on this machine and report libmandoc coverage"
+run = "cargo run --release --example corpus --"

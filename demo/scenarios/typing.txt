@@ -1,0 +1,37 @@
+ready
+run "export PATH=/workspace/mt/a:/workspace/mt/b:$PATH; PS1=$(printf '\\001\\033[38;5;75m\\002~/projects\\001\\033[0m\\002 \\001\\033[38;5;141m\\002❯\\001\\033[0m\\002 '); printf '\\033[2J\\033[H'"
+wait 600
+shot m00
+type "m"
+wait 60
+shot t01
+type "a"
+wait 60
+shot t02
+type "n"
+wait 60
+shot t03
+type "t"
+wait 60
+shot t04
+type "e"
+wait 60
+shot t05
+type "r"
+wait 60
+shot t06
+type "n"
+wait 60
+shot t07
+type " "
+wait 60
+shot t08
+type "t"
+wait 60
+shot t09
+type "a"
+wait 60
+shot t10
+type "r"
+wait 60
+shot t11

@@ -1,0 +1,8 @@
+/target
+/out
+/.crabbox
+/demo/video/node_modules
+/demo/video/out
+/demo/video/public/shots
+/demo/video/public/music.wav
+/demo/out
