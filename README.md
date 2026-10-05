@@ -12,7 +12,7 @@ It uses the Tern Surface Protocol (TSP) to draw this UI directly in the terminal
 
 ## Build and install
 
-You can build it on a Unix system with Rust 1.88 or later, a C compiler (for the vendored mandoc sources), and the system `man` installed:
+You can build it on a Unix system with Rust 1.88 or later, a C compiler (for the vendored mandoc sources), the zlib, xz (liblzma) and bzip2 libraries, and the system `man` installed:
 
 ```sh
 cargo build --release
