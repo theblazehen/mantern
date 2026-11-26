@@ -1,29 +1,32 @@
 /* Added on top of style.css when the terminal draws the surface in the UI
-   face (`font: "sans"`). Prose is Geist; what a person would type stays in
-   the terminal's face, as Tern's own views do with their `mono` token. */
+   face (`font: "sans"`). Prose is Geist; what a person would type (flags,
+   commands, synopsis lines) stays in the terminal's face, as Tern's own
+   views do with their `mono` token. */
 
-/* Section heads read as labels instead of loud capitals. */
+/* Section heads are small tracked labels, quiet while folded and full
+   strength once opened, so a folded page reads as a table of contents. */
 .sf-section > .sf-section-head .sf-head {
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
 }
+.sf-section:not(.collapsed) > .sf-section-head .sf-head { color: var(--t1); }
+.sf-section:not(.collapsed) > .sf-section-head { padding-top: 4px; }
+/* A run of folded sections is a table of contents: rows close together. */
+.sf-section.collapsed + .sf-section.collapsed { margin-top: -6px; }
+
+/* Subsections sit one step below: sentence-case titles in the body colour. */
 .sf-section-body .sf-section > .sf-section-head .sf-head {
   font-size: 13.5px;
-  letter-spacing: 0.01em;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--t1);
 }
+.sf-section-body .sf-section > .sf-section-head { padding-top: 10px; }
 
-/* Literals: flags, commands and file names are bold in the source. */
-[data-role="mantern.p"] .sf-t-strong,
-[data-role="mantern.cell"] .sf-t-strong {
-  font-family: var(--tv-font, var(--mono));
-  font-size: 12.5px;
-}
-
-/* Synopsis lines and option labels are all machine strings. */
+/* Synopsis lines and option tags are all machine strings. */
 .mt-synopsis .sf-text,
 [data-role="mantern.dt"] {
   font-family: var(--tv-font, var(--mono));
   font-size: 12.5px;
 }
-.mt-dl dt { font-size: 12.5px; }

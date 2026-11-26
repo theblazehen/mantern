@@ -23,7 +23,7 @@ pub fn document(doc: &Document, opts: &Options) -> Value {
         set: doc.macro_set,
         next_id: 0,
         fonts: FontState::default(),
-        page_name: doc.metadata.name.clone().or_else(|| doc.metadata.title.clone()).unwrap_or_default(),
+        page_name: doc.metadata.name.as_deref().or(doc.metadata.title.as_deref()).map(escape::plain).unwrap_or_default(),
         current: String::new(),
     };
     let mut children = vec![r.header(doc)];
@@ -77,7 +77,7 @@ struct Flow {
 
 impl Flow {
     fn new() -> Flow {
-        Flow { para: Inline::new(false), out: Vec::new(), hp: None }
+        Flow { para: Inline::prose(), out: Vec::new(), hp: None }
     }
 }
 
@@ -112,7 +112,8 @@ impl Renderer {
 
     fn header(&mut self, doc: &Document) -> Value {
         let m = &doc.metadata;
-        let title = m.title.as_deref().unwrap_or("");
+        let title = escape::plain(m.title.as_deref().unwrap_or(""));
+        let title = title.as_str();
         let name = self.node(
             "text",
             json!({ "spans": [{ "t": title.to_lowercase(), "s": "strong accent" }], "role": "mantern.title", "wrap": "none" }),
@@ -123,8 +124,10 @@ impl Renderer {
             left.push(self.node("badge", json!({ "text": section, "tone": "accent" }), Vec::new()));
         }
         // The volume, system and date, without repeating one in the other.
-        let volume = m.volume.as_deref().filter(|v| !m.os.as_deref().is_some_and(|os| os.starts_with(v)));
-        let meta: Vec<&str> = [volume, m.os.as_deref(), m.date.as_deref()]
+        let field = |f: &Option<String>| f.as_deref().map(escape::plain);
+        let os = field(&m.os);
+        let volume = field(&m.volume).filter(|v| !os.as_deref().is_some_and(|os| os.starts_with(v.as_str())));
+        let meta: Vec<String> = [volume, os, field(&m.date)]
             .into_iter()
             .flatten()
             .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case(title))
@@ -191,7 +194,10 @@ impl Renderer {
         self.current = title.to_ascii_uppercase();
         let mut body = self.blocks(part(n, NodeKind::Body));
         match self.current.as_str() {
-            "SYNOPSIS" => body = vec![self.el("div", "mt-synopsis", body)],
+            // A synopsis set as one code block is already a card of its own.
+            "SYNOPSIS" if !(body.len() == 1 && body[0]["k"] == "code") => {
+                body = vec![self.el("div", "mt-synopsis", body)];
+            }
             "SEE ALSO" => {
                 let mut out = Vec::new();
                 for item in see_also_items(body) {
@@ -271,7 +277,8 @@ impl Renderer {
         }
         let spans = flow.para.take();
         let node = if flow.para.nofill {
-            let lang = if matches!(self.current.as_str(), "SYNOPSIS" | "EXAMPLES" | "EXAMPLE") { "sh" } else { "text" };
+            // Shell highlighting would colour a synopsis's brackets and bars as if they were code.
+            let lang = if matches!(self.current.as_str(), "EXAMPLES" | "EXAMPLE") { "sh" } else { "text" };
             let text = spans_plain(&spans);
             self.node("code", json!({ "text": text.trim_end(), "lang": lang, "role": ROLE_PRE }), Vec::new())
         } else {
@@ -355,6 +362,7 @@ impl Renderer {
             }
             (NodeKind::Block, "TP" | "TQ" | "IP") => {
                 let head = part(n, NodeKind::Head);
+                let head = if matches!(mac, "TP" | "TQ") { after_width(head) } else { head };
                 if head_is_empty(head) {
                     let body = self.blocks(part(n, NodeKind::Body));
                     let div = self.el("div", "mt-indent", body);
@@ -1043,6 +1051,16 @@ fn head_tag(n: &Node) -> Option<&str> {
     n.children.iter().find(|c| c.kind == NodeKind::Head).and_then(|h| h.tag.as_deref())
 }
 
+/// A `.TP`'s head holds its indent argument (`.TP 3`) on the macro's line
+/// and the tag on the next line: the tag is from the first node that starts
+/// a source line. A head with no such node is returned whole.
+fn after_width(head: &[Node]) -> &[Node] {
+    match head.iter().position(|c| c.flags.line_start) {
+        Some(tag) => &head[tag..],
+        None => head,
+    }
+}
+
 fn head_is_empty(head: &[Node]) -> bool {
     fn visible(n: &Node) -> bool {
         n.text.as_deref().is_some_and(|t| !t.trim().is_empty()) || n.children.iter().any(visible)
@@ -1223,5 +1241,66 @@ mod tests {
         let items = see_also_items(vec![para(&text)]);
         let [SeeAlso::Chips(chips)] = items.as_slice() else { panic!("one chip group expected") };
         assert_eq!(chips.len(), 20_000);
+    }
+
+    /// Renders roff `source` as a page, as the system `man` would find it.
+    fn render(source: &str) -> Value {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!("mantern-render-{}-{}.1", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        std::fs::write(&path, source).unwrap();
+        let page = crate::page::parse(&path);
+        let _ = std::fs::remove_file(&path);
+        super::document(&page.unwrap().document, &super::Options { fold: false })
+    }
+
+    /// Every span's text under `node`, in order.
+    fn text(node: &Value) -> String {
+        let mut out = String::new();
+        if let Some(spans) = node["p"]["spans"].as_array() {
+            for span in spans {
+                out.push_str(span.as_str().or_else(|| span["t"].as_str()).unwrap_or(""));
+            }
+        }
+        for child in node["c"].as_array().into_iter().flatten() {
+            out.push_str(&text(child));
+        }
+        out
+    }
+
+    fn find<'a>(node: &'a Value, role: &str, out: &mut Vec<&'a Value>) {
+        if node["p"]["role"] == role {
+            out.push(node);
+        }
+        for child in node["c"].as_array().into_iter().flatten() {
+            find(child, role, out);
+        }
+    }
+
+    const PAGE: &str = ".TH T 1\n.SH NAME\nt \\- does a thing\n.SH DESCRIPTION\n";
+
+    #[test]
+    fn a_tag_paragraphs_indent_argument_is_not_part_of_its_tag() {
+        let doc = render(&format!("{PAGE}.TP 3\n0\nif OK,\n.TP\n1\nif not\n"));
+        let mut tags = Vec::new();
+        find(&doc, "mantern.dt", &mut tags);
+        let tags: Vec<String> = tags.into_iter().map(text).collect();
+        assert_eq!(tags, ["0", "1"]);
+    }
+
+    #[test]
+    fn header_fields_are_printed_without_roff_escapes() {
+        let doc = render(".TH \"GIT\\-COMMIT\" 1 \"\" \"Git 2\\&.56\\&.0\" \"Git Manual\"\n.SH NAME\nt \\- x\n");
+        let mut header = Vec::new();
+        find(&doc, "mantern.header", &mut header);
+        let header = text(header[0]);
+        assert!(header.contains("git-commit"), "{header}");
+        assert!(header.contains("Git 2.56.0"), "{header}");
+    }
+
+    #[test]
+    fn a_hand_numbered_list_keeps_a_gap_after_its_number() {
+        let doc = render(&format!("{PAGE}.RS 4\n\\h'-04' 1.\\h'+01'\\c\nby using\n.RE\n"));
+        assert!(text(&doc).contains("1. by using"), "{}", text(&doc));
     }
 }
