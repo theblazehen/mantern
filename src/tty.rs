@@ -67,6 +67,15 @@ pub struct Tty {
     hup: bool,
 }
 
+/// How [`Tty::hello`] learns that no reply is coming.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Probe {
+    /// Send DA1 after the query; its answer arrives after any reply.
+    Da1,
+    /// Send the query alone and wait for the reply or the timeout.
+    ReplyOnly,
+}
+
 impl Tty {
     /// Opens the terminal and enters raw mode. Termination signals are caught
     /// first, so there is no moment in raw mode that a `SIGTERM` could end
@@ -211,9 +220,9 @@ impl Tty {
         while unsafe { libc::read(self.wake.as_raw_fd(), sink.as_mut_ptr().cast(), sink.len()) } > 0 {}
     }
 
-    /// Ask whether the terminal speaks TSP: the `hello` query, then DA1,
-    /// which every terminal answers. The reply comes before the DA1 answer
-    /// or not at all.
+    /// Ask whether the terminal speaks TSP: the `hello` query, then (with
+    /// [`Probe::Da1`]) DA1, which every terminal answers. The reply comes
+    /// before the DA1 answer or not at all.
     ///
     /// After `timeout` the reply no longer counts, but reading goes on for a
     /// grace period until the DA1 answer (the last thing owed), then drains
@@ -221,20 +230,40 @@ impl Tty {
     /// next. A fixed wait can't promise an arbitrarily late answer never
     /// arrives. A termination signal or hangup ends the probe early; see
     /// [`Tty::signal`] and [`Tty::hung_up`].
-    pub fn hello(&mut self, out: &mut impl Write, query: &str, timeout: Duration) -> io::Result<Option<Value>> {
-        write!(out, "\x1b_tsp;q;{query}\x1b\\\x1b[c")?;
+    ///
+    /// [`Probe::ReplyOnly`] is for tmux, which answers DA1 from its own
+    /// panes at once, so a DA1 answer says nothing about Tern: the query goes
+    /// alone, and only the reply or the timeout ends the wait.
+    pub fn hello(&mut self, out: &mut impl Write, query: &str, timeout: Duration, probe: Probe) -> io::Result<Option<Value>> {
+        write!(out, "\x1b_tsp;q;{query}\x1b\\")?;
+        if probe == Probe::Da1 {
+            write!(out, "\x1b[c")?;
+        }
         out.flush()?;
         let deadline = Instant::now() + timeout;
         let mut buf = Vec::new();
         loop {
-            if let Some(reply) = scan(&buf) {
-                return Ok(reply);
+            match probe {
+                Probe::Da1 => {
+                    if let Some(reply) = scan(&buf) {
+                        return Ok(reply);
+                    }
+                }
+                Probe::ReplyOnly => {
+                    if let Some(reply) = hello_reply(&String::from_utf8_lossy(&buf)) {
+                        return Ok(Some(reply));
+                    }
+                }
             }
             match self.ready(Some(deadline), true, &mut buf)? {
                 Ready::Data => {}
                 Ready::Timeout => break,
                 Ready::Hangup | Ready::Signal => return Ok(None),
             }
+        }
+        if probe == Probe::ReplyOnly {
+            self.drain(DRAIN);
+            return Ok(None);
         }
         let grace = Instant::now() + HELLO_GRACE;
         loop {
@@ -320,12 +349,15 @@ fn scan(buf: &[u8]) -> Option<Option<Value>> {
     let text = String::from_utf8_lossy(buf);
     let da1 = text.find("\x1b[?")?;
     text[da1..].find('c')?;
-    let reply = text[..da1].find("\x1b_tsp;r;").and_then(|start| {
-        let body = &text[start + "\x1b_tsp;r;".len()..da1];
-        let end = body.find("\x1b\\")?;
-        serde_json::from_str::<Value>(&body[..end]).ok()
-    });
-    Some(reply.filter(|r| r["r"] == "hello"))
+    Some(hello_reply(&text[..da1]))
+}
+
+/// The `hello` reply in `text`, if it holds a whole one.
+fn hello_reply(text: &str) -> Option<Value> {
+    let start = text.find("\x1b_tsp;r;")? + "\x1b_tsp;r;".len();
+    let end = text[start..].find("\x1b\\")?;
+    let reply = serde_json::from_str::<Value>(&text[start..start + end]).ok()?;
+    (reply["r"] == "hello").then_some(reply)
 }
 
 /// What the terminal sent while a surface listens.
@@ -380,7 +412,7 @@ pub fn take_input(buf: &mut Vec<u8>) -> Vec<Input> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Input, scan, take_input};
+    use super::{Input, hello_reply, scan, take_input};
 
     #[test]
     fn waits_for_da1_and_takes_the_reply_before_it() {
@@ -388,6 +420,16 @@ mod tests {
         let done = scan(b"\x1b_tsp;r;{\"r\":\"hello\",\"v\":1,\"apc\":65536}\x1b\\\x1b[?62;22c").unwrap();
         assert_eq!(done.unwrap()["apc"], 65536);
         assert_eq!(scan(b"\x1b[?62;22c"), Some(None));
+    }
+
+    #[test]
+    fn a_reply_alone_counts_once_whole_and_a_da1_answer_is_no_reply() {
+        // tmux answers DA1 on its own, so without Tern only that arrives.
+        assert_eq!(hello_reply("\x1b[?62;22c"), None);
+        assert_eq!(hello_reply("\x1b_tsp;r;{\"r\":\"hello\",\"v\":1"), None);
+        assert_eq!(hello_reply("\x1b_tsp;r;{\"r\":\"blobs\",\"have\":[]}\x1b\\"), None);
+        let both = hello_reply("\x1b[?62;22c\x1b_tsp;r;{\"r\":\"hello\",\"credits\":2}\x1b\\").unwrap();
+        assert_eq!(both["credits"], 2);
     }
 
     #[test]

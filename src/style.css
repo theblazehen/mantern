@@ -4,7 +4,17 @@
    Spacing follows a 4px step (4, 8, 12, 16, 24). A section is set apart
    from the one above it by more space than separates its heading from its
    own text, so a heading reads as belonging to what follows it. Running
-   text keeps to a reading measure; tables of entries may go wider. */
+   text keeps to a reading measure inside a column that is itself capped and
+   centred in a wide pane. */
+
+/* The whole page: one column, centred, so a wide pane gets margins rather
+   than lines of text a hand's breadth apart from their flags. */
+[data-role="mantern.doc"] {
+  width: 100%;
+  max-width: 120ch;
+  margin-left: auto;
+  margin-right: auto;
+}
 
 /* Title block */
 [data-role="mantern.header"] {
@@ -69,7 +79,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 120ch;
+  box-sizing: border-box;
   padding: 12px 16px;
   border-radius: 10px;
   background: var(--card);
@@ -87,12 +97,11 @@
 .mt-dl {
   display: flex;
   flex-direction: column;
-  max-width: 120ch;
   margin: 0;
 }
 .mt-item {
   display: grid;
-  grid-template-columns: minmax(10ch, 24ch) minmax(0, 1fr);
+  grid-template-columns: minmax(10ch, 32ch) minmax(0, 1fr);
   column-gap: 20px;
   align-items: start;
   padding: 10px 12px;
