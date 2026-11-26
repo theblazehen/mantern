@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
 use libmandoc_rs::MacroSet;
@@ -53,7 +53,7 @@ fn main() -> ExitCode {
 /// the terminal was never touched.
 fn native(system_man: &Path, args: &[OsString]) -> Result<Native, Box<dyn Error>> {
     if !eligible(args) {
-        return Ok(declined("not a single page on a terminal outside a multiplexer"));
+        return Ok(declined("not a single page on a terminal outside screen and zellij"));
     }
     let Some(path) = page::locate(system_man, args) else {
         return Ok(declined("the system man found no page"));
@@ -66,10 +66,16 @@ fn native(system_man: &Path, args: &[OsString]) -> Result<Native, Box<dyn Error>
         return Ok(declined("the page uses neither man(7) nor mdoc(7)"));
     }
 
+    let titles = match Titles::enter() {
+        Ok(titles) => titles,
+        Err(why) => return Ok(declined(&why)),
+    };
     let mut tty = tty::Tty::open_raw()?;
     let mut stdout = io::stdout().lock();
     let query = json!({ "q": "hello", "v": [1], "app": "mantern", "ver": env!("CARGO_PKG_VERSION") });
-    let hello = match tty.hello(&mut stdout, &query.to_string(), Duration::from_secs(1)) {
+    // tmux answers DA1 itself, so there it is no sign of Tern's silence.
+    let probe = if titles.is_some() { tty::Probe::ReplyOnly } else { tty::Probe::Da1 };
+    let hello = match tty.hello(&mut stdout, &query.to_string(), Duration::from_secs(1), probe) {
         Ok(hello) => hello,
         Err(err) => return Ok(failed(&err)),
     };
@@ -138,11 +144,11 @@ fn declined(reason: &str) -> Native {
     Native::Declined
 }
 
-/// One page (`[SECTION] NAME`) written to a terminal outside a multiplexer
-/// (they swallow TSP), unless `MANTERN=0` opts out.
+/// One page (`[SECTION] NAME`) written to a terminal, unless `MANTERN=0`
+/// opts out. screen and zellij swallow TSP; tmux is handled by [`Titles`].
 fn eligible(args: &[OsString]) -> bool {
     if env::var_os("MANTERN").is_some_and(|v| v == "0")
-        || ["TMUX", "STY", "ZELLIJ"].iter().any(|v| env::var_os(v).is_some())
+        || ["STY", "ZELLIJ"].iter().any(|v| env::var_os(v).is_some())
         // SAFETY: isatty only inspects the descriptor.
         || unsafe { libc::isatty(libc::STDOUT_FILENO) } != 1
     {
@@ -155,6 +161,45 @@ fn eligible(args: &[OsString]) -> bool {
         [name] => !name.starts_with('-'),
         [section, name] => is_section(section) && !name.starts_with('-'),
         _ => false,
+    }
+}
+
+/// Inside tmux, Tern draws the pane only while it sets the session option
+/// `@tern-tsp`, and tmux turns every APC string into the pane's title unless
+/// the pane's `allow-set-title` is off. This holds it off from before the
+/// first TSP byte until dropped, then gives the pane its titles back.
+struct Titles {
+    pane: String,
+}
+
+impl Titles {
+    /// `Ok(None)` outside tmux; `Err` says why Tern isn't drawing this tmux.
+    fn enter() -> Result<Option<Titles>, String> {
+        if env::var_os("TMUX").is_none() {
+            return Ok(None);
+        }
+        let tmux = |args: &[&str]| Command::new("tmux").args(args).stdin(Stdio::null()).stderr(Stdio::null()).output();
+        let marked = tmux(&["show-options", "-qv", "@tern-tsp"])
+            .map_err(|err| format!("tmux can't be asked whether Tern draws this session: {err}"))?;
+        if !marked.status.success() || marked.stdout.iter().all(u8::is_ascii_whitespace) {
+            return Err("this tmux session isn't drawn by Tern".to_owned());
+        }
+        let pane = env::var("TMUX_PANE").map_err(|_| "tmux names no pane for this program".to_owned())?;
+        let off = tmux(&["set-option", "-p", "-t", &pane, "allow-set-title", "off"]).map_err(|err| err.to_string())?;
+        if !off.status.success() {
+            return Err("tmux wouldn't turn the pane's titles off".to_owned());
+        }
+        Ok(Some(Titles { pane }))
+    }
+}
+
+impl Drop for Titles {
+    fn drop(&mut self) {
+        let _ = Command::new("tmux")
+            .args(["set-option", "-pu", "-t", &self.pane, "allow-set-title"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 

@@ -2,7 +2,7 @@
 
 `mantern` is a small Rust man page viewer for the [Tern](https://docs.stencil.so/tern/) terminal. 
 
-![mantern tar in Tern 0.9.26, showing the page title and synopsis card](docs/screenshot.png)
+![mantern ls in Tern 0.9.26: title block, synopsis card and the options as a two-column list, centred in a wide pane](docs/screenshot.png)
 
 ## What it is
 
@@ -60,7 +60,8 @@ To close the live page and get back to your shell, press `q`, Ctrl-C, or Ctrl-D.
 
 - You don't give it a single `NAME` or `SECTION NAME` (for example if you use flags like `-k`, `-f`, or `-w`)
 - Standard output isn't a terminal (like if you pipe or redirect it)
-- `TMUX`, `STY`, or `ZELLIJ` is set (meaning you're in tmux, screen, or zellij)
+- `STY` or `ZELLIJ` is set (meaning you're in screen or zellij, which swallow TSP)
+- You're inside tmux, but Tern isn't drawing that tmux session (the session option `@tern-tsp` is unset), or the terminal doesn't answer in time
 - The terminal doesn't answer the TSP handshake or doesn't advertise `flow` support
 - `MANTERN=0` is set
 - It can't find the initial page, or the page doesn't use `man(7)` or `mdoc(7)`, or parsing or native drawing errors out
@@ -72,7 +73,8 @@ If the system `man` isn't available on `PATH`, it will just show an error.
 
 - Native mode only accepts one page per invocation, not a list of pages
 - It doesn't implement pager-style navigation or search keys yet; you have to use Tern's scrolling and the section headings
-- It uses the fallback path in tmux, screen, and zellij, and also for `man`'s flag-based modes
+- It uses the fallback path in screen and zellij, and also for `man`'s flag-based modes
+- Inside tmux it only draws natively in a Tern pane. It turns the pane's `allow-set-title` off while the page is open (tmux would otherwise take every TSP message as a window title) and restores it when it exits
 - It doesn't try to fully reproduce roff layout. If there's a construct it doesn't have a native UI for, it just degrades to text
 
 ## Environment variables

@@ -105,6 +105,15 @@ pub struct Features {
     pub sans: bool,
 }
 
+/// Puts everything `main` holds, and the key hint, in one column of its own,
+/// which the stylesheet centres in a wide pane so the page keeps its measure.
+fn frame(main: &mut Value) {
+    let mut children = main["c"].take();
+    children.as_array_mut().expect("main is a col").push(hint());
+    // `main` spaces its own children 16px apart; the column carries that on.
+    main["c"] = json!([{ "id": "page", "k": "col", "p": { "role": "mantern.doc", "gap": "lg" }, "c": children }]);
+}
+
 /// The messages that open `page` as a live flow surface named `id`: open,
 /// stylesheet, the document. It stays open (and listening) until
 /// [`leave_messages`]. Fails, before anything is sent, when the terminal
@@ -117,22 +126,22 @@ pub fn page_messages(
     kinds: Option<&[String]>,
 ) -> Result<Vec<(char, Value)>, String> {
     let mut main = render::document(&page.document, &render::Options { fold });
-    main["c"].as_array_mut().expect("the document is a col").push(hint());
+    frame(&mut main);
     check_document(&main, kinds)?;
     Ok(open(id, &title(&page.document), main, features))
 }
 
 /// A one-line page for a `name(section)` the system `man` doesn't have.
 pub fn missing_messages(id: &str, label: &str, features: Features) -> Vec<(char, Value)> {
-    let text = json!({
+    let mut text = json!({
         "id": "main", "k": "col", "c": [
             { "id": "missing", "k": "text", "p": { "spans": [
                 { "t": "No manual entry for ", "s": "muted" },
                 { "t": label, "s": "strong" },
             ], "role": "mantern.missing" } },
-            hint(),
         ]
     });
+    frame(&mut text);
     open(id, &format!("man {label}"), text, features)
 }
 
