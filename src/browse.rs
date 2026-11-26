@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::page::{self, Page};
 use crate::tsp::{SendError, Wire};
 use crate::tty::{Input, Ready, Tty, take_input};
-use crate::{is_section, leave_messages, missing_messages, page_messages};
+use crate::{Features, is_section, leave_messages, missing_messages, page_messages};
 
 type Messages = Vec<(char, Value)>;
 
@@ -23,8 +23,8 @@ const DRAIN: Duration = Duration::from_millis(150);
 pub struct Browser {
     /// The `man` that finds pages; asked again for every page followed.
     pub system_man: PathBuf,
-    /// The terminal accepts stylesheets.
-    pub styles: bool,
+    /// What the terminal draws beyond a plain document.
+    pub features: Features,
     /// `MANTERN_FOLD=0` keeps every section open.
     pub allow_fold: bool,
     /// The node kinds the terminal draws, when it said.
@@ -122,7 +122,7 @@ impl Browser {
         live: &mut Live,
     ) -> Result<Infallible, End> {
         let (rows, cols) = tty.size().unwrap_or((24, 80));
-        let messages = page_messages(&live.id, first, self.fold(first, rows, cols), self.styles, self.kinds.as_deref())
+        let messages = page_messages(&live.id, first, self.fold(first, rows, cols), self.features, self.kinds.as_deref())
             .map_err(End::Declined)?;
         self.show(wire, live, messages).map_err(|err| match err {
             SendError::Unsendable(why) => End::Declined(why),
@@ -180,7 +180,7 @@ impl Browser {
             },
             None => {
                 live.page = false;
-                self.show(wire, live, missing_messages(&live.id, label, self.styles))?;
+                self.show(wire, live, missing_messages(&live.id, label, self.features))?;
                 Ok(())
             }
         }
@@ -194,7 +194,7 @@ impl Browser {
         }
         let label = live.label.clone().unwrap_or_default();
         *live = Live::new(live.n + 1, Some(label.clone()), false);
-        self.show(wire, live, missing_messages(&live.id, &label, self.styles))?;
+        self.show(wire, live, missing_messages(&live.id, &label, self.features))?;
         Ok(())
     }
 
@@ -205,7 +205,7 @@ impl Browser {
             .and_then(|args| page::locate(&self.system_man, &args))
             .and_then(|path| page::parse(&path).ok())
             .filter(|page| page.document.macro_set != MacroSet::None)?;
-        match page_messages(id, &page, self.fold(&page, rows, cols), self.styles, self.kinds.as_deref()) {
+        match page_messages(id, &page, self.fold(&page, rows, cols), self.features, self.kinds.as_deref()) {
             Ok(messages) => Some(messages),
             Err(why) => {
                 if std::env::var_os("MANTERN_DEBUG").is_some() {

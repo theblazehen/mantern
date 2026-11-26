@@ -14,6 +14,7 @@ use std::io::{self, Write};
 use serde_json::{Value, json};
 
 pub const STYLE: &str = include_str!("style.css");
+pub const STYLE_SANS: &str = include_str!("style-sans.css");
 
 const HINT: &str = "q closes this page · click a SEE ALSO chip to open it below";
 
@@ -86,6 +87,16 @@ impl Write for CountingWriter {
     }
 }
 
+/// What the terminal said it draws beyond a plain document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Features {
+    /// It takes stylesheets (`s`).
+    pub styles: bool,
+    /// It draws a surface in the UI face (`font: "sans"`), which machine
+    /// strings leave for the terminal's mono face.
+    pub sans: bool,
+}
+
 /// The messages that open `page` as a live flow surface named `id`: open,
 /// stylesheet, the document. It stays open (and listening) until
 /// [`leave_messages`]. Fails, before anything is sent, when the terminal
@@ -94,18 +105,18 @@ pub fn page_messages(
     id: &str,
     page: &page::Page,
     fold: bool,
-    styles: bool,
+    features: Features,
     kinds: Option<&[String]>,
 ) -> Result<Vec<(char, Value)>, String> {
     let mut main = render::document(&page.document, &render::Options { fold });
     let hint = json!({ "id": "hint", "k": "text", "p": { "spans": [{ "t": HINT, "s": "muted" }], "role": "mantern.hint" } });
     main["c"].as_array_mut().expect("the document is a col").push(hint);
     check_document(&main, kinds)?;
-    Ok(open(id, &title(&page.document), main, styles))
+    Ok(open(id, &title(&page.document), main, features))
 }
 
 /// A one-line page for a `name(section)` the system `man` doesn't have.
-pub fn missing_messages(id: &str, label: &str, styles: bool) -> Vec<(char, Value)> {
+pub fn missing_messages(id: &str, label: &str, features: Features) -> Vec<(char, Value)> {
     let text = json!({
         "id": "main", "k": "col", "c": [
             { "id": "missing", "k": "text", "p": { "spans": [
@@ -115,16 +126,23 @@ pub fn missing_messages(id: &str, label: &str, styles: bool) -> Vec<(char, Value
             { "id": "hint", "k": "text", "p": { "spans": [{ "t": HINT, "s": "muted" }], "role": "mantern.hint" } },
         ]
     });
-    open(id, &format!("man {label}"), text, styles)
+    open(id, &format!("man {label}"), text, features)
 }
 
-fn open(id: &str, title: &str, main: Value, styles: bool) -> Vec<(char, Value)> {
-    let mut messages = vec![(
-        'o',
-        json!({ "id": id, "mode": "flow", "title": title, "role": "mantern.page" }),
-    )];
-    if styles {
+fn open(id: &str, title: &str, main: Value, features: Features) -> Vec<(char, Value)> {
+    // A page keeps nothing a close would lose, so closing its pane needs no
+    // confirmation while it is open. Terminals that predate `closable`
+    // ignore the field.
+    let mut surface = json!({ "id": id, "mode": "flow", "title": title, "role": "mantern.page", "closable": true });
+    if features.sans {
+        surface["font"] = json!("sans");
+    }
+    let mut messages = vec![('o', surface)];
+    if features.styles {
         messages.push(('s', json!({ "sf": id, "name": "mantern", "css": STYLE })));
+        if features.sans {
+            messages.push(('s', json!({ "sf": id, "name": "mantern-sans", "css": STYLE_SANS })));
+        }
     }
     // A page taller than the pane would otherwise open at its bottom, where the cursor is.
     let first = main["c"][0]["id"].as_str().map(str::to_owned);
@@ -158,7 +176,7 @@ fn title(doc: &libmandoc_rs::Document) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_DEPTH, MAX_NODES, check_document, is_section};
+    use super::{Features, MAX_DEPTH, MAX_NODES, check_document, is_section, missing_messages};
     use serde_json::{Value, json};
 
     fn nest(levels: usize) -> Value {
@@ -167,6 +185,25 @@ mod tests {
             node = json!({ "id": format!("n{i}"), "k": "col", "c": [node] });
         }
         node
+    }
+
+    #[test]
+    fn the_ui_face_and_its_sheet_are_asked_for_only_when_the_terminal_has_them() {
+        let open = |f: Features| missing_messages("man", "x(1)", f);
+        let sheets = |m: &[(char, Value)]| m.iter().filter(|(v, _)| *v == 's').count();
+
+        let plain = open(Features { styles: true, sans: false });
+        assert!(plain[0].1.get("font").is_none());
+        assert_eq!(sheets(&plain), 1);
+
+        let sans = open(Features { styles: true, sans: true });
+        assert_eq!(sans[0].1["font"], "sans");
+        assert_eq!(sheets(&sans), 2);
+
+        // Without stylesheets there is nothing to send, whatever the face.
+        let bare = open(Features { styles: false, sans: true });
+        assert_eq!(bare[0].1["font"], "sans");
+        assert_eq!(sheets(&bare), 0);
     }
 
     #[test]

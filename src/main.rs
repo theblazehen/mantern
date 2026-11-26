@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use libmandoc_rs::MacroSet;
 use mantern::browse::{Browser, End};
-use mantern::{is_section, page, tsp, tty};
+use mantern::{Features, is_section, page, tsp, tty};
 use serde_json::{Value, json};
 
 /// What `native` did.
@@ -90,7 +90,7 @@ fn native(system_man: &Path, args: &[OsString]) -> Result<Native, Box<dyn Error>
     let mut wire = tsp::Wire::new(stdout, apc);
     let browser = Browser {
         system_man: system_man.to_owned(),
-        styles: has_feature(&hello, "styles"),
+        features: Features { styles: has_feature(&hello, "styles"), sans: has_feature(&hello, "font") },
         allow_fold: env::var_os("MANTERN_FOLD").is_none_or(|v| v != "0"),
         kinds: hello["kinds"]
             .as_array()

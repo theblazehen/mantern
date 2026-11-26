@@ -25,7 +25,7 @@ mkdir -p ~/.local/bin
 install -m755 target/release/mantern ~/.local/bin/mantern
 ```
 
-To get the rendering shown in the screenshot, your terminal needs to support TSP `flow` and `styles`. Without `styles`, `mantern` will still send the page, just without its stylesheet. Tern 0.4.5 supports both features; Tern 0.4.1 does not support this native mode. `mantern` checks what features the terminal advertises rather than checking the version number.
+To get the rendering shown in the screenshot, your terminal needs to support TSP `flow` and `styles`. Without `styles`, `mantern` will still send the page, just without its stylesheet. Tern 0.4.5 supports both features; Tern 0.4.1 does not support this native mode. If the terminal also advertises `font`, `mantern` draws the page in Tern's UI face (Geist), keeping flags, synopsis lines and code in the terminal's mono face; without it the page stays all mono. While a page is open, closing its pane doesn't ask for confirmation, since nothing is lost. `mantern` checks what features the terminal advertises rather than checking the version number.
 
 If you want to use it as your `man` command, you can add this alias to your shell configuration (like `~/.zshrc`):
 
