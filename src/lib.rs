@@ -16,7 +16,15 @@ use serde_json::{Value, json};
 pub const STYLE: &str = include_str!("style.css");
 pub const STYLE_SANS: &str = include_str!("style-sans.css");
 
-const HINT: &str = "q closes this page · click a SEE ALSO chip to open it below";
+/// The line under a live page: the key that closes it, set as a keycap.
+fn hint() -> Value {
+    json!({
+        "id": "hint", "k": "text", "p": { "role": "mantern.hint", "spans": [
+            { "t": "q", "s": "key" },
+            { "t": " closes this page · click a SEE ALSO chip to open it below", "s": "muted" },
+        ] }
+    })
+}
 
 /// Tern draws at most this many levels. The surface root is level 1 and
 /// `main` level 2; `main` is counted as 3, since the docs don't say whether
@@ -109,8 +117,7 @@ pub fn page_messages(
     kinds: Option<&[String]>,
 ) -> Result<Vec<(char, Value)>, String> {
     let mut main = render::document(&page.document, &render::Options { fold });
-    let hint = json!({ "id": "hint", "k": "text", "p": { "spans": [{ "t": HINT, "s": "muted" }], "role": "mantern.hint" } });
-    main["c"].as_array_mut().expect("the document is a col").push(hint);
+    main["c"].as_array_mut().expect("the document is a col").push(hint());
     check_document(&main, kinds)?;
     Ok(open(id, &title(&page.document), main, features))
 }
@@ -123,7 +130,7 @@ pub fn missing_messages(id: &str, label: &str, features: Features) -> Vec<(char,
                 { "t": "No manual entry for ", "s": "muted" },
                 { "t": label, "s": "strong" },
             ], "role": "mantern.missing" } },
-            { "id": "hint", "k": "text", "p": { "spans": [{ "t": HINT, "s": "muted" }], "role": "mantern.hint" } },
+            hint(),
         ]
     });
     open(id, &format!("man {label}"), text, features)
@@ -144,7 +151,9 @@ fn open(id: &str, title: &str, main: Value, features: Features) -> Vec<(char, Va
             messages.push(('s', json!({ "sf": id, "name": "mantern-sans", "css": STYLE_SANS })));
         }
     }
-    // A page taller than the pane would otherwise open at its bottom, where the cursor is.
+    // A page taller than the pane would otherwise open at its bottom, where the
+    // cursor is. Tern lays the page out after this frame, so a current Tern
+    // ignores the reveal here; the browser sends it again once the frame is acked.
     let first = main["c"][0]["id"].as_str().map(str::to_owned);
     let mut ops = vec![json!(["add", "main", id, null, main])];
     ops.extend(first.map(|first| json!(["reveal", first, "start"])));
@@ -167,7 +176,7 @@ pub fn leave_messages(id: &str, hint_seq: Option<u64>, keep: bool) -> Vec<(char,
 
 fn title(doc: &libmandoc_rs::Document) -> String {
     let m = &doc.metadata;
-    let name = m.name.as_deref().or(m.title.as_deref()).unwrap_or("man");
+    let name = m.name.as_deref().or(m.title.as_deref()).map_or_else(|| "man".to_owned(), escape::plain);
     match &m.section {
         Some(section) => format!("man {name}({section})"),
         None => format!("man {name}"),

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use libmandoc_rs::MacroSet;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::page::{self, Page};
 use crate::tsp::{SendError, Wire};
@@ -69,11 +69,15 @@ struct Live {
     open: bool,
     sent: u64,
     acked: u64,
+    /// The node to scroll to once the terminal has laid the page out: a
+    /// `reveal` in the same frame as the document runs before that, and a
+    /// page taller than the pane then opens at its bottom.
+    reveal: Option<String>,
 }
 
 impl Live {
     fn new(n: u32, label: Option<String>, page: bool) -> Live {
-        Live { n, id: format!("man{n}"), label, page, open: false, sent: 0, acked: 0 }
+        Live { n, id: format!("man{n}"), label, page, open: false, sent: 0, acked: 0, reveal: None }
     }
 
     /// A ack covers every frame up to its number.
@@ -145,6 +149,12 @@ impl Browser {
                     Input::Key(b'q' | 0x03 | 0x04) => return Err(End::Quit),
                     Input::Event(e) if e["ev"] == "ack" && e["sf"] == live.id.as_str() => {
                         live.acked = live.acked.max(e["s"].as_u64().unwrap_or(0));
+                        if live.acked >= 1 && live.outstanding() < self.credits {
+                            if let Some(id) = live.reveal.take() {
+                                let frame = json!({ "sf": live.id, "s": live.sent + 1, "ops": [["reveal", id, "start"]] });
+                                transmit(wire, live, vec![('f', frame)])?;
+                            }
+                        }
                     }
                     Input::Event(e) if e["ev"] == "action" && e["act"] == "man" && e["sf"] == live.id.as_str() => {
                         let Some(label) = e["value"].as_str() else { continue };
@@ -219,6 +229,12 @@ impl Browser {
     /// Sends the messages that open `live`'s surface.
     fn show<W: Write>(&self, wire: &mut Wire<W>, live: &mut Live, messages: Messages) -> Result<(), SendError> {
         live.open = true;
+        live.reveal = messages
+            .iter()
+            .filter(|(verb, _)| *verb == 'f')
+            .flat_map(|(_, body)| body["ops"].as_array().into_iter().flatten())
+            .find(|op| op[0] == "reveal")
+            .and_then(|op| op[1].as_str().map(str::to_owned));
         transmit(wire, live, messages)
     }
 

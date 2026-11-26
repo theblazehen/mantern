@@ -64,6 +64,13 @@ pub struct Run {
     pub font: Font,
 }
 
+/// `text` as the plain string roff would print, for the fields of a page's
+/// header and footer.
+pub fn plain(text: &str) -> String {
+    let mut fonts = FontState::default();
+    decode(text, &mut fonts).into_iter().map(|run| run.text).collect()
+}
+
 /// Decode `text`, starting in `fonts.current` and leaving the font it ends
 /// in there, as roff does across input lines.
 pub fn decode(text: &str, fonts: &mut FontState) -> Vec<Run> {
@@ -135,8 +142,19 @@ pub fn decode(text: &str, fonts: &mut FontState) -> Vec<Run> {
                 }
                 arg(&mut chars);
             }
-            // Delimited arguments: motions, widths, drawing, device controls.
-            'h' | 'v' | 'w' | 'o' | 'b' | 'x' | 'X' | 'Z' | 'D' | 'l' | 'L' | 'R' | 'S' | 'H'
+            // A forward motion is a gap (generators use `\h'+1'` after a
+            // hand-set list number); a backward one has no text equivalent.
+            'h' => {
+                let motion = delimited(&mut chars);
+                let width = motion.trim_start_matches('+');
+                let forward = !motion.starts_with(['-', '|'])
+                    && width.trim_start_matches(|c: char| c == '0' || c == '.').starts_with(|c: char| c.is_ascii_digit());
+                if forward {
+                    buf.push(' ');
+                }
+            }
+            // Delimited arguments: widths, drawing, device controls.
+            'v' | 'w' | 'o' | 'b' | 'x' | 'X' | 'Z' | 'D' | 'l' | 'L' | 'R' | 'S' | 'H'
             | 'A' | 'B' => {
                 delimited(&mut chars);
             }
@@ -225,6 +243,19 @@ mod tests {
 
     fn decoded(text: &str) -> Vec<(String, Font)> {
         decode(text, &mut FontState::default()).into_iter().map(|r| (r.text, r.font)).collect()
+    }
+
+    #[test]
+    fn forward_motions_leave_a_gap_and_backward_ones_leave_none() {
+        assert_eq!(plain(r"\h'-04' 1.\h'+01'by"), " 1. by");
+        assert_eq!(plain(r"a\h'2n'b"), "a b");
+        assert_eq!(plain(r"a\h'0'b\h'|0'c"), "abc");
+    }
+
+    #[test]
+    fn plain_drops_escapes_header_fields_carry() {
+        assert_eq!(plain(r"GIT\-COMMIT"), "GIT-COMMIT");
+        assert_eq!(plain(r"Git 2\&.56\&.0"), "Git 2.56.0");
     }
 
     #[test]

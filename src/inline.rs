@@ -13,10 +13,13 @@ pub struct Span {
 }
 
 impl Span {
-    fn to_json(&self) -> Value {
+    fn to_json(&self, literal: bool) -> Value {
         let mut style = Vec::new();
         if self.font.bold {
             style.push("strong");
+            if literal {
+                style.push("mono");
+            }
         }
         if self.font.italic {
             style.push("em");
@@ -35,6 +38,43 @@ impl Span {
     }
 }
 
+/// The longest bold run, in words, that reads as something to type (a
+/// command, a flag, a keyword) rather than emphasised prose.
+const LITERAL_WORDS: usize = 3;
+
+/// Which spans are literals: bold, and part of a bold run of at most
+/// [`LITERAL_WORDS`] words, where a run is bold spans joined only by
+/// whitespace. Man pages set `\fBnot enough\fP` and `\fB--flag\fP` alike, so
+/// length is the only tell. A surface in the UI face draws these in mono.
+fn literal_flags(spans: &[Span]) -> Vec<bool> {
+    let mut flags = vec![false; spans.len()];
+    let mut i = 0;
+    while i < spans.len() {
+        if !spans[i].font.bold {
+            i += 1;
+            continue;
+        }
+        let mut words = 0;
+        let mut end = i;
+        let mut j = i;
+        while j < spans.len() {
+            let s = &spans[j];
+            if s.font.bold {
+                words += s.text.split_whitespace().count();
+                end = j + 1;
+            } else if !s.text.trim().is_empty() {
+                break;
+            }
+            j += 1;
+        }
+        if words <= LITERAL_WORDS {
+            flags[i..end].iter_mut().for_each(|f| *f = true);
+        }
+        i = end;
+    }
+    flags
+}
+
 #[derive(Debug, Default)]
 pub struct Inline {
     spans: Vec<Span>,
@@ -49,11 +89,19 @@ pub struct Inline {
     pending_newline: bool,
     /// No-fill text: source lines and spaces are kept.
     pub nofill: bool,
+    /// Short bold runs are marked `mono` (see [`literal_flags`]). Off for
+    /// headings, which are bold throughout.
+    pub literals: bool,
 }
 
 impl Inline {
     pub fn new(nofill: bool) -> Inline {
         Inline { nofill, ..Inline::default() }
+    }
+
+    /// A body paragraph's builder: its short bold runs are literals.
+    pub fn prose() -> Inline {
+        Inline { literals: true, ..Inline::default() }
     }
 
     pub fn is_blank(&self) -> bool {
@@ -139,7 +187,8 @@ impl Inline {
         self.pending_newline = false;
         trim(&mut spans, self.nofill);
         autolink(&mut spans);
-        spans.iter().map(Span::to_json).collect()
+        let literal = if self.literals { literal_flags(&spans) } else { vec![false; spans.len()] };
+        spans.iter().zip(literal).map(|(s, l)| s.to_json(l)).collect()
     }
 
     /// The visible text, for headings and classification.
@@ -329,6 +378,28 @@ mod tests {
             found,
             [("openssl-req(1ssl)", "man:openssl-req(1ssl)".to_owned()), ("perlre(1)", "man:perlre(1)".to_owned())]
         );
+    }
+
+    #[test]
+    fn short_bold_runs_are_literals_and_bold_sentences_are_not() {
+        let mono = |words: &[&str]| {
+            let mut inline = Inline::prose();
+            inline.word("Use", Font::ROMAN, None, false);
+            for w in words {
+                inline.word(w, Font::BOLD, None, false);
+            }
+            inline.word("now.", Font::ROMAN, None, false);
+            let spans = inline.take();
+            spans.iter().filter(|s| s["s"].as_str().is_some_and(|s| s.contains("mono"))).count()
+        };
+        assert_eq!(mono(&["--color"]), 1);
+        assert_eq!(mono(&["git", "commit", "-a"]), 3, "every word of a short run");
+        assert_eq!(mono(&["Test", "the", "archive", "volume", "label"]), 0);
+
+        // Headings are bold throughout and never literals.
+        let mut heading = Inline::new(false);
+        heading.word("Exit", Font::BOLD, None, false);
+        assert!(heading.take().iter().all(|s| !s["s"].as_str().unwrap_or("").contains("mono")));
     }
 
     #[test]

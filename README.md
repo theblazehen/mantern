@@ -2,11 +2,11 @@
 
 `mantern` is a small Rust man page viewer for the [Tern](https://docs.stencil.so/tern/) terminal. 
 
-![mantern tar in Tern 0.4.5, showing the page title and synopsis card](docs/screenshot.png)
+![mantern tar in Tern 0.9.26, showing the page title and synopsis card](docs/screenshot.png)
 
 ## What it is
 
-`mantern` is a drop-in `man` replacement. When you run `mantern tar`, instead of showing the page in a pager, it draws a title block, a synopsis card, option cards with highlighted flags, code blocks, lists, and tables as terminal UI. Long pages start with some sections folded so you can expand just the parts you care about.
+`mantern` is a drop-in `man` replacement. When you run `mantern tar`, instead of showing the page in a pager, it draws a title block, a synopsis card, options as a two-column list of flags and descriptions, code blocks, lists, and tables as terminal UI. Long pages start with some sections folded so you can expand just the parts you care about, and open at the top.
 
 It uses the Tern Surface Protocol (TSP) to draw this UI directly in the terminal, with no terminal plugin needed. If something goes wrong or you ask for something it can't handle, it falls back to the system `man`.
 
